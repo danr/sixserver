@@ -52,7 +52,6 @@ fileContents lf uri = do
         Just fp -> IO.readFile fp
         Nothing -> return ""
 
-
 takeWhileRev :: (a -> Bool) -> [a] -> [a]
 takeWhileRev p = reverse . takeWhile p . reverse
 
@@ -72,11 +71,44 @@ hover ghci_ref lf (TextDocumentPositionParams (TextDocumentIdentifier uri) (Posi
   IO.writeFile fp contents
   execStream ghci (":l " ++ fp) (lflog lf)
   res <- exec ghci (":i " ++ contents `idAt` (line, char))
-  reload ghci
+
   return $ Just Hover {
     _contents=LSP.List [ LSP.PlainString (T.pack r) | r <- res ],
     _range=Nothing
   }
+
+complete :: TVar (Maybe Ghci) -> TextDocumentPositionParams ~> CompletionResponseResult
+complete ghci_ref lf (TextDocumentPositionParams (TextDocumentIdentifier uri) (Position line char)) = do
+  Just ghci <- readTVarIO ghci_ref
+  contents <- fileContents lf uri
+  -- (fp, h) <- IO.openTempFile "/tmp" "fileXXXXXXXX.hs"
+  -- IO.hClose h
+  -- IO.writeFile fp contents
+  -- execStream ghci (":l " ++ fp) (lflog lf)
+  let c = show (contents `idAt` (line, char))
+  res <- drop 1 <$> exec ghci (":complete repl " ++ c)
+  LSP.sendFunc lf
+    (LSP.NotificationMessage "2.0" LSP.WindowLogMessage
+      (LSP.LogMessageParams LSP.MtInfo (T.pack c)))
+  return $ Just (CompletionList CompletionListType {
+
+    _isIncomplete=False,
+    _items=LSP.List [CompletionItem {
+        _label = T.pack r,
+        _kind = Nothing,
+        _detail = Nothing,
+        _documentation = Nothing,
+        _sortText = Nothing,
+        _filterText = Nothing,
+        _insertText = Nothing,
+        _insertTextFormat = Nothing,
+        _textEdit = Nothing,
+        _additionalTextEdits = Nothing,
+        _command = Nothing,
+        _xdata = Nothing
+    } | r <- map read res ]
+   })
+
 
 {-
 change :: Notified DidChangeTextDocumentParams
@@ -128,10 +160,16 @@ main = do
   LSP.run
     (\ _ -> Right (), \ lf -> STM.atomically (STM.writeTVar lsp_funcs_ref (Just lf)) >> return Nothing)
     (def {
-      hoverHandler=handle (hover ghci_ref)
+      hoverHandler=handle (hover ghci_ref),
+      completionHandler=handle (complete ghci_ref)
 --    , didChangeTextDocumentNotificationHandler=notified change
     })
-    def
+    (def {-
+      _hoverProvider=Just True,
+      _completionProvider=Just CompletionOptions {
+        _resolveProvider=Just False,
+        _triggerCharacters=Just ["."]
+      } -})
   return ()
 
 

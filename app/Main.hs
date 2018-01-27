@@ -55,12 +55,17 @@ fileContents lf uri = do
 takeWhileRev :: (a -> Bool) -> [a] -> [a]
 takeWhileRev p = reverse . takeWhile p . reverse
 
-idAt :: String -> (Int, Int) -> String
-idAt s (y, x) = takeWhileRev p a ++ takeWhile p z
+offsetIdAt :: String -> (Int, Int) -> (Int, String)
+offsetIdAt s (y, x) = (length h, h ++ takeWhile p z)
   where
+    h = takeWhileRev p a
     p c = Char.isAlpha c || c `elem` ("._" :: [Char])
     line = lines s !! y
     (a, z) = splitAt x line
+
+
+idAt :: String -> (Int, Int) -> String
+idAt s = snd . offsetIdAt s
 
 hover :: TVar (Maybe Ghci) -> TextDocumentPositionParams ~> Hover
 hover ghci_ref lf (TextDocumentPositionParams (TextDocumentIdentifier uri) (Position line char)) = do
@@ -81,20 +86,15 @@ complete :: TVar (Maybe Ghci) -> TextDocumentPositionParams ~> CompletionRespons
 complete ghci_ref lf (TextDocumentPositionParams (TextDocumentIdentifier uri) (Position line char)) = do
   Just ghci <- readTVarIO ghci_ref
   contents <- fileContents lf uri
-  -- (fp, h) <- IO.openTempFile "/tmp" "fileXXXXXXXX.hs"
-  -- IO.hClose h
-  -- IO.writeFile fp contents
-  -- execStream ghci (":l " ++ fp) (lflog lf)
-  let c = show (contents `idAt` (line, char))
-  res <- drop 1 <$> exec ghci (":complete repl " ++ c)
+  let (offset, str_to_complete) = contents `offsetIdAt` (line, char)
+  res <- drop 1 <$> exec ghci (":complete repl " ++ show (str_to_complete))
   LSP.sendFunc lf
     (LSP.NotificationMessage "2.0" LSP.WindowLogMessage
-      (LSP.LogMessageParams LSP.MtInfo (T.pack c)))
+      (LSP.LogMessageParams LSP.MtInfo (T.pack (show (offset, str_to_complete)))))
   return $ Just (CompletionList CompletionListType {
-
     _isIncomplete=False,
     _items=LSP.List [CompletionItem {
-        _label = T.pack r,
+        _label = T.pack (drop offset r),
         _kind = Nothing,
         _detail = Nothing,
         _documentation = Nothing,
@@ -109,11 +109,18 @@ complete ghci_ref lf (TextDocumentPositionParams (TextDocumentIdentifier uri) (P
     } | r <- map read res ]
    })
 
+change :: TVar (Maybe Ghci) -> Notified DidChangeTextDocumentParams
+change ghci_ref lf (LSP.DidChangeTextDocumentParams (LSP.VersionedTextDocumentIdentifier uri version) _) = do
+  Just ghci <- readTVarIO ghci_ref
 
-{-
-change :: Notified DidChangeTextDocumentParams
-change lf (LSP.DidChangeTextDocumentParams (LSP.VersionedTextDocumentIdentifier uri version) _) = do
   contents <- fileContents lf uri
+  (fp, h) <- IO.openTempFile "/tmp" "fileXXXXXXXX.hs"
+  IO.hClose h
+  IO.writeFile fp contents
+  _ <- exec ghci (":l " ++ fp)
+  load <- reload ghci
+  lflog lf () (show load)
+  {-
   LSP.publishDiagnosticsFunc lf 10 uri (Just version) (LSP.partitionBySource [
     LSP.Diagnostic {
       _range=Range (Position 2 1) (Position 2 2),
@@ -122,7 +129,7 @@ change lf (LSP.DidChangeTextDocumentParams (LSP.VersionedTextDocumentIdentifier 
       _source=Nothing,
       _message=contents
     }])
-    -}
+  -}
 
 main :: IO ()
 main = do
@@ -161,8 +168,8 @@ main = do
     (\ _ -> Right (), \ lf -> STM.atomically (STM.writeTVar lsp_funcs_ref (Just lf)) >> return Nothing)
     (def {
       hoverHandler=handle (hover ghci_ref),
-      completionHandler=handle (complete ghci_ref)
---    , didChangeTextDocumentNotificationHandler=notified change
+      completionHandler=handle (complete ghci_ref),
+      didChangeTextDocumentNotificationHandler=notified (change ghci_ref)
     })
     (def {-
       _hoverProvider=Just True,

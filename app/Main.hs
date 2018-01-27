@@ -118,18 +118,20 @@ change ghci_ref lf (LSP.DidChangeTextDocumentParams (LSP.VersionedTextDocumentId
   IO.hClose h
   IO.writeFile fp contents
   _ <- exec ghci (":l " ++ fp)
-  load <- reload ghci
-  lflog lf () (show load)
-  {-
-  LSP.publishDiagnosticsFunc lf 10 uri (Just version) (LSP.partitionBySource [
+  load_messages <- reload ghci
+  -- lflog lf () (show load)
+  LSP.publishDiagnosticsFunc lf (length load_messages) uri (Just version)
+    (LSP.partitionBySource [
     LSP.Diagnostic {
-      _range=Range (Position 2 1) (Position 2 2),
+      _range=Range p p,
       _severity=Nothing,
       _code=Nothing,
       _source=Nothing,
-      _message=contents
-    }])
-  -}
+      _message=T.pack (unlines msgs)
+    }|
+    Message severity filepath (y, x) msgs <- load_messages,
+    let p = Position (y-1) (x-1)
+    ])
 
 main :: IO ()
 main = do

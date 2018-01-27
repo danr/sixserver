@@ -27,7 +27,9 @@ import Data.Aeson (ToJSON)
 
 import qualified System.IO as IO
 
-import Yi.Rope as Yi
+import Data.Char as Char
+
+import qualified Yi.Rope as Yi
 import Data.Text (Text)
 import qualified Data.Text as T
 
@@ -39,20 +41,37 @@ lflog lf _ s =
     (LSP.NotificationMessage "2.0" LSP.WindowLogMessage
       (LSP.LogMessageParams LSP.MtInfo (T.pack s)))
 
-fileContents :: LSP.LspFuncs () -> LSP.Uri -> IO Text
+fileContents :: LSP.LspFuncs () -> LSP.Uri -> IO String
 fileContents lf uri = do
-  Just (VirtualFile _ rope) <- LSP.getVirtualFileFunc lf uri
-  return (Yi.toText rope)
+  -- NB: if this is not just we should return what is on disk instead
+  mvf <- LSP.getVirtualFileFunc lf uri
+  case mvf of
+    Just (VirtualFile _ rope) -> return (Yi.toString rope)
+    Nothing ->
+      case uriToFilePath uri of
+        Just fp -> IO.readFile fp
+        Nothing -> return ""
+
+
+takeWhileRev :: (a -> Bool) -> [a] -> [a]
+takeWhileRev p = reverse . takeWhile p . reverse
+
+idAt :: String -> (Int, Int) -> String
+idAt s (y, x) = takeWhileRev p a ++ takeWhile p z
+  where
+    p c = Char.isAlpha c || c `elem` ("._" :: [Char])
+    line = lines s !! y
+    (a, z) = splitAt x line
 
 hover :: TVar (Maybe Ghci) -> TextDocumentPositionParams ~> Hover
-hover ghci_ref lf (TextDocumentPositionParams (TextDocumentIdentifier uri) range) = do
+hover ghci_ref lf (TextDocumentPositionParams (TextDocumentIdentifier uri) (Position line char)) = do
   Just ghci <- readTVarIO ghci_ref
   contents <- fileContents lf uri
   (fp, h) <- IO.openTempFile "/tmp" "fileXXXXXXXX.hs"
   IO.hClose h
-  IO.writeFile fp (T.unpack contents)
+  IO.writeFile fp contents
   execStream ghci (":l " ++ fp) (lflog lf)
-  res <- exec ghci (":i hover")
+  res <- exec ghci (":i " ++ contents `idAt` (line, char))
   reload ghci
   return $ Just Hover {
     _contents=LSP.List [ LSP.PlainString (T.pack r) | r <- res ],

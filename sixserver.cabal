@@ -36,6 +36,8 @@ executable sixserver
     , stm
     , data-default
     , aeson
+    , yi-rope
+    , text
   other-modules:
       Paths_sixserver
   default-language: Haskell2010
